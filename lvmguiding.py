@@ -40,7 +40,7 @@ spectrophotometric_pa=0 #degrees, E of N, assume fixed (don't account for lack o
 
 
 #Reading the Gaia catalog
-hdul=fits.open("KK_stars_0-17.fits") #down to 17th mag in G band
+hdul=fits.open("../KK_stars_0-17.fits") #down to 17th mag in G band
 cat_full = hdul[1].data # the first extension is a table    
                    # cat['ra'],cat['dec'],cat['phot_g_mean_mag']
 hdul.close()
@@ -291,17 +291,17 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
 def find_guide_stars_auto(input_touple):
     index = input_touple[0]
     c = input_touple[1]
-    print("Analyzing pointing {} of {} (ra: {} dec: {})".format(index+1,len(pointing_list),c.ra.deg,c.dec.deg))
+    print("Analyzing pointing {} (ra: {} dec: {})\n".format(index+1,c.ra.deg,c.dec.deg))
     #c = SkyCoord(frame="galactic", l=280, b=0,unit='deg')
     #print(c)
     for pa in [0,60,120,180,240,300]:
-        print("PA: ",pa)
+        #qqprint("PA: ",pa)
         if pa==0:
             culled_cat=cat_full
-        ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags,culled_cat = find_guide_stars2(c,pa=pa,plotflag=False,recycled_cat=culled_cat)    
+        ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags,culled_cat = find_guide_stars(c,pa=pa,plotflag=False,recycled_cat=culled_cat)    
 
         output = np.stack((ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags))
         filename = "guide_star_search_results/guide_stars_{:06d}_pa_{:03d}".format(index,pa)
         np.savetxt(filename,output,fmt="%10.6f")
         
-    return index
+    return index,len(ras)

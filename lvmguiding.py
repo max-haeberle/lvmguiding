@@ -40,7 +40,7 @@ spectrophotometric_pa=0 #degrees, E of N, assume fixed (don't account for lack o
 
 
 #Reading the Gaia catalog
-hdul=fits.open("../KK_stars_0-17.fits") #down to 17th mag in G band
+hdul=fits.open("./KK_stars_0-17.fits") #down to 17th mag in G band
 cat_full = hdul[1].data # the first extension is a table    
                    # cat['ra'],cat['dec'],cat['phot_g_mean_mag']
 hdul.close()
@@ -161,7 +161,7 @@ def sphdist (ra1, dec1, ra2, dec2):
 #    return rad2deg(np.arccos(np.sin(dec1_r)*np.sin(dec2_r)+np.cos(dec1_r)*np.cos(dec2_r)*np.cos(np.abs(ra1_r-ra2_r))))
     
 
-def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=True,inner_search_radius=0,outer_search_radius=0.692887,cull_cat=True,recycled_cat = None):
+def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=True,inner_search_radius=0,outer_search_radius=0.692887,cull_cat=True,recycled_cat = None,return_focal_plane_coords=False,remote_maglim=17):
     # function to figure out which (suitable) guide stars are on the guider chip
     # input:
     # c in SkyCoord;          contains ra & dec of IFU field center
@@ -185,13 +185,15 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
         cat = recycled_cat
     else:
         if remote_catalog:
-            radius = u.Quantity(1.5, u.deg)
+            radius = u.Quantity(outer_search_radius, u.deg)
             #j = Gaia.cone_search_async(coordinate=c_icrs, radius)
-            j = Gaia.launch_job_async("SELECT source_id, ra,dec,phot_g_mean_mag FROM gaiadr2.gaia_source WHERE phot_g_mean_mag <= 17 AND 1=CONTAINS(POINT('ICRS',ra,dec), CIRCLE('ICRS',"+str(c_icrs.ra.deg)+","+str(c_icrs.dec.deg)+", 1.5))")
+            gaia_query = "SELECT source_id, ra,dec,phot_g_mean_mag FROM gaiaedr3.gaia_source WHERE phot_g_mean_mag <= "+str(remote_maglim)+" AND 1=CONTAINS(POINT('ICRS',ra,dec), CIRCLE('ICRS',"+str(c_icrs.ra.deg)+","+str(c_icrs.dec.deg)+", "+str(radius.value)+"))"
+            j = Gaia.launch_job_async(gaia_query)
             cat = j.get_results()
+            print("Gaia query: ",gaia_query)
             print(f'{len(cat)} stars found within {radius}')
 
-        if cull_cat:
+        elif cull_cat:
             t0 = time.time()
             #print("Culling the catalog: ")
             cat_ra = cat_full[(c_icrs.ra.deg - 2/np.cos(c_icrs.dec.rad) < cat_full['ra'])& (cat_full['ra'] < c_icrs.ra.deg +2/np.cos(c_icrs.dec.rad))]
@@ -243,7 +245,8 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
         else:
             ax3.set_xlim(max(cats2['ra']),min(cats2['ra']))
 
-            
+    if return_focal_plane_coords:
+        return dd_x_mm,dd_y_mm,cats2
     #identify which stars fall on the guider chip
     flags,chip_xxs,chip_yys=in_box(dd_x_mm,dd_y_mm,pa)
     

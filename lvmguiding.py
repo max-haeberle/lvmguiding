@@ -53,7 +53,9 @@ class InstrumentParameters:
             #self.flux_of_vega = a_telescope * 8.71e5
             self.zp = -2.5*np.log10(self.flux_of_vega)
 
-            
+            self.IFU_x = None
+            self.IFU_y = None
+            self.IFU_r = None
             ## the position of the guide chips in each telescope
             #self.sciIFU_pa1=90        #degrees, E of N
             #self.sciIFU_pa2=270       #degrees, E of N
@@ -61,6 +63,11 @@ class InstrumentParameters:
             #self.skyCal_pa2=270       #degrees, E of N
             #self.spectrophotometric_pa=0 #degrees, E of N, assume fixed (don't account for lack of derotation)
 
+    def load_IFU(self,filename="ifu_positions.xyr"):
+        data = np.loadtxt(filename,usecols=(0,1,2))
+        self.IFU_x = data[:,0]
+        self.IFU_y = data[:,1]
+        self.IFU_z = data[:,2]
 
 lvminst = InstrumentParameters(standard_config=True)
 
@@ -349,21 +356,8 @@ def find_guide_stars_auto(input_touple,inst=lvminst):
     return index,len(ras)
 
 
-class synthetic_chip:
-    def __init__(self):
-        self.chip_height=10.2     #mm, guide chip height                    # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
-        self.chip_width=14.4
-        self.pixel_height=1100
-        self.pixel_width = 1600
-        self.image_scale=8.92 # 1arcsec in microns
-        self.a_telescope = np.pi*(16.2/2)**2
-        self.flux_of_vega = self.a_telescope * 1.6e6 #e-/sec/cm2 #This is for the optimistic case, in the pessimistic case the number would be 8.71e5
-        #self.flux_of_vega = a_telescope * 8.71e5
-        self.zp = -2.5*np.log10(self.flux_of_vega)
-        self.bias = 100
-        self.gain = 5
-        self.dark_current = 15
-        self.readout_noise = 5
+
+
 def make_synthetic_image(chip_x,chip_y,gmag,inst,exp_time=5,seeing_arcsec=3.5, sky_flux=10,plotflag = True,write_output=None):
     seeing_pixel = seeing_arcsec*inst.image_scale / (inst.chip_width/inst.pixel_width*1000) / 2.36
     

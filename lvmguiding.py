@@ -8,36 +8,61 @@ from astropy.coordinates import ICRS, Galactic, FK4, FK5  # Low-level frames
 from astropy.coordinates import Angle, Latitude, Longitude  # Angles
 import astropy.units as u
 from astroquery.gaia import Gaia
+from scipy.ndimage import gaussian_filter
+from scipy import optimize
 
 #Instrument specs
-r_outer=44.5/2         #mm, outer radius (constrained by IFU/chip separation, defines the telescope FoV)
-                     # taken from SDSS-V_0129_LVMi_PDR.pdf Table 7
-image_scale=8.92     #1arcsec in microns
-                     # taken from SDSS-V_0129_LVMi_PDR.pdf Table 7
-pix_scale=1.01       #arcsec per pixel
-                     # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
-chip_height=10.2     #mm, guide chip height
-                     # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
-chip_width=14.4      #mm, guide chip width
-                     # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
+
+class InstrumentParameters:
+    def __init__(self,standard_config=True):
+        if standard_config:
+            self.r_outer=44.5/2         #mm, outer radius (constrained by IFU/chip separation, defines the telescope FoV)
+                                 # taken from SDSS-V_0129_LVMi_PDR.pdf Table 7
+            self.image_scale=8.92     #1arcsec in microns
+                                 # taken from SDSS-V_0129_LVMi_PDR.pdf Table 7
+            self.pix_scale=1.01       #arcsec per pixel
+                                 # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
+                
+            self.a_telescope = np.pi*(16.2/2)**2
+                
+            self.chip_height=10.2     #mm, guide chip height
+                                 # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
+            self.chip_width=14.4      #mm, guide chip width
+                                 # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
+
+            self.pixel_height=1100
+            self.pixel_width = 1600
+            
+            self.bias = 100
+            self.gain = 5
+            self.dark_current = 15
+            self.readout_noise = 5
+            
+            self.inner_search_radius= 0 #degrees
+            self.outer_search_radius= 1000*self.r_outer/self.image_scale /3600
+
+            # guiding limits
+            self.mag_lim_lower=17   # mag 
+                                 #16.44 mag would be the limit, taken from LVM-0059 Table 8 (optimistic)
+            self.mag_lim_upper=0.     # mag, currently no limit
+            self.min_neighbour_distance=-1.      #arcsec,
 
     
-inner_search_radius= 0 #degrees
-outer_search_radius= 1000*r_outer/image_scale /3600
+            
+            self.flux_of_vega = self.a_telescope * 1.6e6 #e-/sec/cm2 #This is for the optimistic case, in the pessimistic case the number would be 8.71e5
+            #self.flux_of_vega = a_telescope * 8.71e5
+            self.zp = -2.5*np.log10(self.flux_of_vega)
 
-# guiding limits
-mag_lim_lower=17   # mag 
-                     #16.44 mag would be the limit, taken from LVM-0059 Table 8 (optimistic)
-mag_lim_upper=0.     # mag, currently no limit
-guide_window=7.      #arcsec, in diameter
+            
+            ## the position of the guide chips in each telescope
+            #self.sciIFU_pa1=90        #degrees, E of N
+            #self.sciIFU_pa2=270       #degrees, E of N
+            #self.skyCal_pa1=90        #degrees, E of N
+            #self.skyCal_pa2=270       #degrees, E of N
+            #self.spectrophotometric_pa=0 #degrees, E of N, assume fixed (don't account for lack of derotation)
 
-# the position of the guide chips in each telescope
-sciIFU_pa1=90        #degrees, E of N
-sciIFU_pa2=270       #degrees, E of N
-skyCal_pa1=90        #degrees, E of N
-skyCal_pa2=270       #degrees, E of N
-spectrophotometric_pa=0 #degrees, E of N, assume fixed (don't account for lack of derotation)
 
+lvminst = InstrumentParameters(standard_config=True)
 
 #Reading the Gaia catalog
 hdul=fits.open("./KK_stars_0-17.fits") #down to 17th mag in G band
@@ -45,7 +70,7 @@ cat_full = hdul[1].data # the first extension is a table
                    # cat['ra'],cat['dec'],cat['phot_g_mean_mag']
 hdul.close()
 
-def in_box(xxs,yys,pa_deg):
+def in_box(xxs,yys,pa_deg,inst=lvminst):
     # tells you if an xy coordinate (in the focal plane) is on the guider chip
     # based on the instrument specs (above)
     # xy coordinates follow the definitions laid out in LVM-0040_LVM_Coordinates.pdf
@@ -62,16 +87,16 @@ def in_box(xxs,yys,pa_deg):
     pa=pa_deg/180.*np.pi
     
     #find some vertices, A and B, of the box (see Photo_on13.07.20at13.58.jpg)
-    Ar=r_outer
-    Atheta=np.arcsin(chip_width/2./r_outer)
+    Ar=inst.r_outer
+    Atheta=np.arcsin(inst.chip_width/2./inst.r_outer)
     
     phi=(np.pi-Atheta)/2.
-    h1=chip_width/(2.*np.tan(phi))
-    h2=r_outer-chip_height-h1
+    h1=inst.chip_width/(2.*np.tan(phi))
+    h2=inst.r_outer-inst.chip_height-h1
     
-    chi=np.arctan(h2/(chip_width/2.))
+    chi=np.arctan(h2/(inst.chip_width/2.))
     
-    Br=np.sqrt(chip_width*chip_width/2./2.+h2*h2)
+    Br=np.sqrt(inst.chip_width*inst.chip_width/2./2.+h2*h2)
     Btheta=np.pi/2.-chi
             
     
@@ -96,10 +121,10 @@ def in_box(xxs,yys,pa_deg):
         
         
     #compare with box edges
-    flagg=xxs*0.
+    flagg=np.array(len(xxs)*[False])
     
     ii=((derot_xxs < Ax) & (derot_xxs > -1.*Ax) & (derot_yys < Ay) & (derot_yys > By))
-    flagg[ii]=1.
+    flagg[ii]=True
         
     #return flags testing whether object is on the chip
     #also return x,y position on chip (in mm), in chip coordinates
@@ -107,7 +132,7 @@ def in_box(xxs,yys,pa_deg):
     #note! this does not account for the 6th mirror, which flips the handedness
     return flagg,derot_xxs+Bx,derot_yys-By
 
-def ad2xy(cats2,c_icrs):
+def ad2xy(cats2,c_icrs,inst=lvminst):
     # converts ra/dec positions to angular offsets from field center (c_icrs)
     #
     # inputs:
@@ -139,8 +164,8 @@ def ad2xy(cats2,c_icrs):
     dd_x *= (2*(cats2['ra'] < c_icrs.ra.deg).astype(float)-1)  
     
     #convert to mm
-    dd_x_mm=dd_x*image_scale/1e3
-    dd_y_mm=dd_y*image_scale/1e3
+    dd_x_mm=dd_x*inst.image_scale/1e3
+    dd_y_mm=dd_y*inst.image_scale/1e3
     
     return dd_x_mm,dd_y_mm
     
@@ -161,7 +186,7 @@ def sphdist (ra1, dec1, ra2, dec2):
 #    return rad2deg(np.arccos(np.sin(dec1_r)*np.sin(dec2_r)+np.cos(dec1_r)*np.cos(dec2_r)*np.cos(np.abs(ra1_r-ra2_r))))
     
 
-def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=True,inner_search_radius=0,outer_search_radius=0.692887,cull_cat=True,recycled_cat = None,return_focal_plane_coords=False,remote_maglim=17):
+def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=True,inner_search_radius=0,outer_search_radius=lvminst.outer_search_radius,cull_cat=True,recycled_cat = None,return_focal_plane_coords=False,remote_maglim=None,inst=lvminst):
     # function to figure out which (suitable) guide stars are on the guider chip
     # input:
     # c in SkyCoord;          contains ra & dec of IFU field center
@@ -185,6 +210,8 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
         cat = recycled_cat
     else:
         if remote_catalog:
+            if remote_maglim is None:
+                remote_maglim = inst.mag_lim_lower
             radius = u.Quantity(outer_search_radius, u.deg)
             #j = Gaia.cone_search_async(coordinate=c_icrs, radius)
             gaia_query = "SELECT source_id, ra,dec,phot_g_mean_mag FROM gaiaedr3.gaia_source WHERE phot_g_mean_mag <= "+str(remote_maglim)+" AND 1=CONTAINS(POINT('ICRS',ra,dec), CIRCLE('ICRS',"+str(c_icrs.ra.deg)+","+str(c_icrs.dec.deg)+", "+str(radius.value)+"))"
@@ -210,7 +237,7 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     #pick the subset that is within 1.5 degree
     #also check some magnitude range
     
-    ii=(dd < outer_search_radius) & (dd > inner_search_radius)  & (cat['phot_g_mean_mag'] < mag_lim_lower) & (cat['phot_g_mean_mag'] > mag_lim_upper)
+    ii=(dd < outer_search_radius) & (dd > inner_search_radius)  & (cat['phot_g_mean_mag'] < inst.mag_lim_lower) & (cat['phot_g_mean_mag'] > inst.mag_lim_upper)
     cats2=cat[ii]
     t1 = time.time()
     #print("Circular selection complete. It took me {:.1f} s".format(t1-t0))
@@ -218,7 +245,7 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     
     #print("Scale conversion...")
     t0 = time.time()
-    dd_x_mm,dd_y_mm=ad2xy(cats2,c_icrs)
+    dd_x_mm,dd_y_mm=ad2xy(cats2,c_icrs,inst=inst)
     
     if east_is_right:
         dd_x_mm=-1.*dd_x_mm
@@ -248,26 +275,38 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     if return_focal_plane_coords:
         return dd_x_mm,dd_y_mm,cats2
     #identify which stars fall on the guider chip
-    flags,chip_xxs,chip_yys=in_box(dd_x_mm,dd_y_mm,pa)
+    selection_on_chip,chip_xxs,chip_yys=in_box(dd_x_mm,dd_y_mm,pa,inst=inst)
     
-    iii=np.equal(flags,1)
+    iii=np.equal(selection_on_chip,1)
     
     #overplot the identified guide stars positions
     if plotflag:
-        iii=np.equal(flags,1)
+        iii=np.equal(selection_on_chip,1)
         #print('number of stars on the guide chip: ',np.sum(iii))
         
     
     #also check they aren't crowded. no neighbor within guide_widow (set in preamble)
-    ctr=0
-    for cc in cats2[iii]:
-        #dd=cc.separation(cats2[iii])
-        dd=sphdist(cc['ra'],cc['dec'],cats2['ra'][iii],cats2['dec'][iii])*3600. #in arcsec
-        if np.any((dd > 0) & (dd < guide_window/2.)):
-            flags[ctr]=0
-        ctr+=1
-    iii=np.equal(flags,1)
     
+    #print("Before crowding check: ",np.sum(iii),len(iii))
+    
+    selection_not_crowded = (selection_on_chip==True)
+    
+    if inst.min_neighbour_distance>0:
+        ctr=0
+        for cindex,cc in enumerate(cats2):
+            if selection_on_chip[cindex]:
+                #dd=cc.separation(cats2[iii])
+                dd=sphdist(cc['ra'],cc['dec'],cats2['ra'],cats2['dec'])*3600. #in arcsec
+                if np.any((dd > 0) & (dd < inst.min_neighbour_distance)):
+                    selection_not_crowded[cindex]=False
+                    ctr+=1
+                    #print(cindex,"Sum of not crowded:",np.sum(selection_not_crowded))
+        #print("Flags: ",np.sum(selection_not_crowded))
+        #print(selection_on_chip.dtype,selection_not_crowded.dtype)
+        iii=selection_on_chip & selection_not_crowded
+        print("Removed {} stars due to crowding.".format(ctr))
+    
+    #print("After crowding check: ",np.sum(iii),len(iii))
     #overplot the final cleaned guide star positions
     if plotflag:
         iii=np.equal(flags,1)
@@ -291,7 +330,7 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     return ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags,cats2
     
 
-def find_guide_stars_auto(input_touple):
+def find_guide_stars_auto(input_touple,inst=lvminst):
     index = input_touple[0]
     c = input_touple[1]
     print("Analyzing pointing {} (ra: {} dec: {})\n".format(index+1,c.ra.deg,c.dec.deg))
@@ -308,3 +347,107 @@ def find_guide_stars_auto(input_touple):
         np.savetxt(filename,output,fmt="%10.6f")
         
     return index,len(ras)
+
+
+class synthetic_chip:
+    def __init__(self):
+        self.chip_height=10.2     #mm, guide chip height                    # taken from SDSS-V_0129_LVMi_PDR.pdf Table 13
+        self.chip_width=14.4
+        self.pixel_height=1100
+        self.pixel_width = 1600
+        self.image_scale=8.92 # 1arcsec in microns
+        self.a_telescope = np.pi*(16.2/2)**2
+        self.flux_of_vega = self.a_telescope * 1.6e6 #e-/sec/cm2 #This is for the optimistic case, in the pessimistic case the number would be 8.71e5
+        #self.flux_of_vega = a_telescope * 8.71e5
+        self.zp = -2.5*np.log10(self.flux_of_vega)
+        self.bias = 100
+        self.gain = 5
+        self.dark_current = 15
+        self.readout_noise = 5
+def make_synthetic_image(chip_x,chip_y,gmag,inst,exp_time=5,seeing_arcsec=3.5, sky_flux=10,plotflag = True,write_output=None):
+    seeing_pixel = seeing_arcsec*inst.image_scale / (inst.chip_width/inst.pixel_width*1000) / 2.36
+    
+    x_position = chip_x / inst.chip_width * inst.pixel_width
+    y_position = chip_y / inst.chip_height * inst.pixel_height
+    
+    selection_on_chip = (0<x_position) & (x_position < inst.pixel_width) & (0<y_position) & (y_position < inst.pixel_height)
+    
+    x_position = x_position[selection_on_chip]
+    y_position = y_position[selection_on_chip]
+    gmag = gmag[selection_on_chip]
+    
+    print("{} of {} stars are on the chip.".format(np.sum(selection_on_chip),len(selection_on_chip)))
+    
+    #gaia_legend_mag = np.arange(17,4,mag_lim_index)
+    #gaia_legend_flux= 10**(-(np.array(gaia_legend_mag)+zp)/2.5)
+    
+    gaia_flux = 10**(-(gmag+inst.zp)/2.5)
+
+    background = (sky_flux+inst.dark_current)*exp_time
+    n_pix = 7*7
+
+
+    background_noise = np.sqrt(background+inst.readout_noise**2)
+    signal = gaia_flux*exp_time
+    noise = np.sqrt(inst.readout_noise**2+signal+n_pix*background)
+
+
+    sn = signal/noise
+
+
+    
+    star_image = np.zeros((inst.pixel_height,inst.pixel_width))
+
+    for index, current_flux in enumerate(gaia_flux):
+        current_x = x_position[index]
+        current_y = y_position[index]
+
+        i = int(current_x)
+        j = int(current_y)
+
+        xx = current_x-i
+        yy = current_y-j
+
+        #
+        #test_image[j,i] = current_f
+
+
+        star_image[j,i] = (1-xx)*(1-yy)*current_flux*exp_time
+
+
+        if i<inst.pixel_width-1:
+            star_image[j,i+1] = (xx)*(1-yy)*current_flux*exp_time
+        if j< inst.pixel_height-1:
+            star_image[j+1,i] = (1-xx)*(yy)*current_flux*exp_time
+        if (i<inst.pixel_width-1) & (j<inst.pixel_height-1):
+            star_image[j+1,i+1] = (xx)*(yy)*current_flux*exp_time
+
+        #star_image[int(current_y),int(current_x)] = current_flux*exp_time
+
+    star_image_c = gaussian_filter(star_image, sigma=seeing_pixel,mode="constant")
+    star_image_c_noise = np.random.poisson(lam=star_image_c,size = star_image_c.shape)
+
+    
+    background_array = np.random.poisson(background,size=star_image.shape)
+
+    readout_noise_array = np.random.normal(loc=0,scale = inst.readout_noise,size=star_image.shape)
+
+    combined = star_image_c_noise + background_array + readout_noise_array + inst.bias
+
+#hdu = fits.PrimaryHDU(star_image_c)
+#hdu.writeto("/home/haeberle/exchange/lvm/synthetic_image_sparse_field_5s.fits",overwrite=True)
+
+
+    
+    if write_output is not None:
+        
+        hdu = fits.PrimaryHDU(combined)
+
+
+        #filename = "/home/haeberle/exchange/lvm/synthetic_images/pointing_"+pointing_string+"_{:d}ms.fits".format(int(1000*exp_time))
+        print("writing file: ",write_output)
+        hdu.writeto(write_output,overwrite=False)
+
+    print("Nstars: ",x_position.shape)
+    
+    return combined

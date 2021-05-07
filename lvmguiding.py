@@ -297,7 +297,6 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     #print("Before crowding check: ",np.sum(iii),len(iii))
     
     selection_not_crowded = (selection_on_chip==True)
-    
     if inst.min_neighbour_distance>0:
         ctr=0
         for cindex,cc in enumerate(cats2):

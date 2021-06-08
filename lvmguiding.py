@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 from astropy.io import fits
+from astropy.table import Table,vstack
 from astropy.coordinates import SkyCoord  # High-level coordinates
 from astropy.coordinates import ICRS, Galactic, FK4, FK5  # Low-level frames
 from astropy.coordinates import Angle, Latitude, Longitude  # Angles
@@ -10,7 +11,8 @@ import astropy.units as u
 from astroquery.gaia import Gaia
 from scipy.ndimage import gaussian_filter
 from scipy import optimize
-
+import healpy as hp
+from astropy.table import Table, hstack, vstack
 #Instrument specs
 
 class InstrumentParameters:
@@ -76,6 +78,69 @@ hdul=fits.open("./KK_stars_0-17.fits") #down to 17th mag in G band
 cat_full = hdul[1].data # the first extension is a table    
                    # cat['ra'],cat['dec'],cat['phot_g_mean_mag']
 hdul.close()
+
+
+
+def get_cat_using_healpix(c,plotflag=False,inst=lvminst):
+    vec = hp.ang2vec(np.deg2rad(c.dec.value+90),np.deg2rad(c.ra.value))
+
+    ipix_disc = hp.query_disc(nside=64, vec=vec, radius=np.deg2rad(inst.outer_search_radius),inclusive=True)
+    print(ipix_disc)
+
+    if plotflag:
+        fig,ax = plt.subplots(figsize=(12,12))
+        ax.set_aspect("equal")
+        ax.axhline(c.dec.value)
+        ax.axvline(c.ra.value)
+    counter=0
+    for ipix in ipix_disc:
+        filename = "Gaia_Healpix_64/{:06d}.fits".format(ipix)
+
+        hdul = fits.open(filename)
+        data= Table(hdul[1].data)
+        print(filename,len(data))
+        #data = data.filled()
+        if plotflag:
+            ax.plot(data["ra"],data["dec"],".")
+        if counter==0:
+            data_combined = data
+            counter+=1
+        else:
+            data_combined = vstack([data_combined, data])
+    return data_combined
+
+
+def get_cat_using_healpix2(c,plotflag=False,inst=lvminst,verbose=False):
+    vec = hp.ang2vec(np.deg2rad(-c.dec.value+90),np.deg2rad(c.ra.value))
+
+    ipix_disc = hp.query_disc(nside=64, vec=vec, radius=np.deg2rad(inst.outer_search_radius),inclusive=True,nest=True)
+    if verbose: print(ipix_disc)
+
+    if plotflag:
+        fig,ax = plt.subplots(figsize=(12,12))
+        ax.set_aspect("equal")
+        ax.axhline(c.dec.value)
+        ax.axvline(c.ra.value)
+    counter=0
+    for ipix in ipix_disc:
+        filename = "/data/beegfs/astro-storage/groups/others/neumayer/haeberle/lvm_outsourced/Gaia_Healpix_6/lvl6_{:06d}.npy".format(ipix)
+        data = np.load(filename)
+        #hdul = fits.open(filename)
+        #data= Table(hdul[1].data)
+        if verbose: print(filename,len(data))
+        #data = data.filled()
+        if plotflag:
+            ax.plot(data["ra"],data["dec"],".")
+        if counter==0:
+            data_combined = data
+            counter+=1
+        else:
+            #data_combined = vstack([data_combined, data])
+            data_combined = np.concatenate([data_combined, data])
+    return data_combined
+
+
+
 
 def in_box(xxs,yys,pa_deg,inst=lvminst):
     # tells you if an xy coordinate (in the focal plane) is on the guider chip
@@ -193,7 +258,7 @@ def sphdist (ra1, dec1, ra2, dec2):
 #    return rad2deg(np.arccos(np.sin(dec1_r)*np.sin(dec2_r)+np.cos(dec1_r)*np.cos(dec2_r)*np.cos(np.abs(ra1_r-ra2_r))))
     
 
-def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=True,inner_search_radius=0,outer_search_radius=lvminst.outer_search_radius,cull_cat=True,recycled_cat = None,return_focal_plane_coords=False,remote_maglim=None,inst=lvminst):
+def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=True,cull_cat=True,recycled_cat = None,return_focal_plane_coords=False,remote_maglim=None,inst=lvminst):
     # function to figure out which (suitable) guide stars are on the guider chip
     # input:
     # c in SkyCoord;          contains ra & dec of IFU field center
@@ -206,7 +271,8 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     # returns: ra,dec, G-band magnitude of all stars on the chip, as well as xy pixel positions (in mm)
                         #note! this does not account for the 6th mirror, which flips the handedness
 
-    
+    inner_search_radius=inst.inner_search_radius
+    outer_search_radius=inst.outer_search_radius,
     global cat 
     
     #make sure c is in icrs
@@ -336,23 +402,30 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     return ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags,cats2
     
 
-def find_guide_stars_auto(input_touple,inst=lvminst):
+def find_guide_stars_auto(input_touple,inst=lvminst,folder="guide_star_search_results/",verbose=False,save_bin = True):
+    #print(inst.mag_lim_lower)
+    t0 = time.time()
     index = input_touple[0]
     c = input_touple[1]
-    print("Analyzing pointing {} (ra: {} dec: {})\n".format(index+1,c.ra.deg,c.dec.deg))
+    if verbose: print("Analyzing pointing {} (ra: {} dec: {})\n".format(index+1,c.ra.deg,c.dec.deg))
     #c = SkyCoord(frame="galactic", l=280, b=0,unit='deg')
     #print(c)
     for pa in [0,60,120,180,240,300]:
         #qqprint("PA: ",pa)
         if pa==0:
-            culled_cat=cat_full
-        ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags,culled_cat = find_guide_stars(c,pa=pa,plotflag=False,recycled_cat=culled_cat)    
+            culled_cat=get_cat_using_healpix2(c,plotflag=False,inst=inst)
+        ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags,culled_cat = find_guide_stars(c,pa=pa,plotflag=False,recycled_cat=culled_cat,inst=inst)    
 
-        output = np.stack((ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags))
-        filename = "guide_star_search_results/guide_stars_{:06d}_pa_{:03d}".format(index,pa)
-        np.savetxt(filename,output,fmt="%10.6f")
+        output = np.stack((ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags),axis=1)
         
-    return index,len(ras)
+        if save_bin:
+            filename = folder+"guide_stars_{:06d}_pa_{:03d}.npy".format(index,pa)
+            np.save(filename,output)
+        else:
+            filename = folder+"guide_stars_{:06d}_pa_{:03d}".format(index,pa)
+            np.savetxt(filename,output,fmt="%10.6f")
+        
+    return index,len(ras),time.time()-t0
 
 
 

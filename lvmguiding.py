@@ -272,7 +272,7 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
                         #note! this does not account for the 6th mirror, which flips the handedness
 
     inner_search_radius=inst.inner_search_radius
-    outer_search_radius=inst.outer_search_radius,
+    outer_search_radius=inst.outer_search_radius
     global cat 
     
     #make sure c is in icrs
@@ -288,9 +288,10 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
             radius = u.Quantity(outer_search_radius, u.deg)
             #j = Gaia.cone_search_async(coordinate=c_icrs, radius)
             gaia_query = "SELECT source_id, ra,dec,phot_g_mean_mag FROM gaiaedr3.gaia_source WHERE phot_g_mean_mag <= "+str(remote_maglim)+" AND 1=CONTAINS(POINT('ICRS',ra,dec), CIRCLE('ICRS',"+str(c_icrs.ra.deg)+","+str(c_icrs.dec.deg)+", "+str(radius.value)+"))"
+            print("Gaia query: ",gaia_query)
             j = Gaia.launch_job_async(gaia_query)
             cat = j.get_results()
-            print("Gaia query: ",gaia_query)
+            #print("Gaia query: ",gaia_query)
             print(f'{len(cat)} stars found within {radius}')
 
         elif cull_cat:
@@ -381,7 +382,7 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     #print("After crowding check: ",np.sum(iii),len(iii))
     #overplot the final cleaned guide star positions
     if plotflag:
-        iii=np.equal(flags,1)
+        #iii=np.equal(flags,1)
         #print('after checking for crowding: ',np.sum(iii))
         ax1.plot(dd_x_mm[iii],dd_y_mm[iii],"c.",ms=4)
         #ax1.plot(dd_x_mm[iii][mags<12],dd_y_mm[iii][mags<12],"b.",ms=6)
@@ -402,7 +403,7 @@ def find_guide_stars(c, pa, plotflag=False, remote_catalog=False, east_is_right=
     return ras,decs,dd_x_mm,dd_y_mm,chip_xxs,chip_yys,mags,cats2
     
 
-def find_guide_stars_auto(input_touple,inst=lvminst,folder="guide_star_search_results/",verbose=False,save_bin = True):
+def find_guide_stars_auto(input_touple,inst=lvminst,folder="/data/beegfs/astro-storage/groups/others/neumayer/haeberle/lvm_outsourced/guide_star_search_results_no_faint_limit/",verbose=False,save_bin = True):
     #print(inst.mag_lim_lower)
     t0 = time.time()
     index = input_touple[0]
@@ -517,3 +518,18 @@ def make_synthetic_image(chip_x,chip_y,gmag,inst,exp_time=5,seeing_arcsec=3.5, s
     print("Nstars: ",x_position.shape)
     
     return combined
+
+def calc_sn(gmag,inst,n_pix=7*7,sky_flux=10,exp_time=5):
+        gaia_flux = 10**(-(gmag+inst.zp)/2.5)
+
+        background = (sky_flux+inst.dark_current)*exp_time
+
+
+        background_noise = np.sqrt(background+inst.readout_noise**2)
+        signal = gaia_flux*exp_time
+        noise = np.sqrt(inst.readout_noise**2+signal+n_pix*background)
+
+
+        sn = signal/noise
+
+        return sn

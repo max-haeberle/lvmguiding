@@ -12,7 +12,7 @@ import os
 # connecting to Gaia Archive
 gaia = TapPlus(url="http://gea.esac.esa.int/tap-server/tap")
 #gaia.login_gui()
-gaia.login(user='mhaberle', password='4J0v%6@i1jd8')
+gaia.login(user='mhaberle', password='xxx')
 
 hpx_query = 6
 

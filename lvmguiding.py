@@ -123,7 +123,7 @@ def get_cat_using_healpix2(c,plotflag=False,inst=lvminst,verbose=False):
         ax.axvline(c.ra.value)
     counter=0
     for ipix in ipix_disc:
-        filename = "/data/beegfs/astro-storage/groups/others/neumayer/haeberle/lvm_outsourced/Gaia_Healpix_6/lvl6_{:06d}.npy".format(ipix)
+        filename = "Gaia_Healpix_6/lvl6_{:06d}.npy".format(ipix)
         data = np.load(filename)
         #hdul = fits.open(filename)
         #data= Table(hdul[1].data)

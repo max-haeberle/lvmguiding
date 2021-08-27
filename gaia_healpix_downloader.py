@@ -69,7 +69,7 @@ for i in range(11654,nhpx):
         print("reconnecting in 10sec")
         sleep(10)
         gaia = TapPlus(url="http://gea.esac.esa.int/tap-server/tap")
-        gaia.login(user='mhaberle', password='4J0v%6@i1jd8')
+        gaia.login(user='mhaberle', password='xxx')
         print(i,nhpx)
         job = gaia.launch_job_async(QUERIES[i])
         print(i,job)
